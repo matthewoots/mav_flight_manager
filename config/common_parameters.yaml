@@ -1,0 +1,6 @@
+offboard_command_rate: 10.0
+external_timeout: 15.0
+max_velocity: 2.0
+max_acceleration: 10.0
+takeoff_land_velocity: 1.0
+takeoff_height: 1.0

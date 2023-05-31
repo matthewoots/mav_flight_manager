@@ -1,0 +1,9 @@
+[submodule "external/yaml-cpp"]
+	path = external/yaml-cpp
+	url = git@github.com:jbeder/yaml-cpp.git
+[submodule "external/sockpp"]
+	path = external/sockpp
+	url = git@github.com:fpagliughi/sockpp.git
+[submodule "external/msgs_idl"]
+	path = external/msgs_idl
+	url = git@github.com:matthewoots/msgs_idl.git
