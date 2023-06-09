@@ -1,0 +1,28 @@
+# [COMMANDS LIST]
+# 1. TAKEOFF = [cmd, sync_mode, participants]
+# 2. HOLD = [cmd, sync_mode, participants, duration]
+# 3. MOVE = [cmd, sync_mode, participants, target]
+# 4. EXTERNAL = [cmd, sync_mode, participants]
+# 5. LAND = [cmd, sync_mode, participants]
+#   target_format = x y z yaw (rad)
+
+# [SYNC]
+#   - If START means that all agents wait for each other to start
+#   - If END means that all agents wait for each other to end
+# 1. SYNC (START and/or END)
+# 2. NOSYNC
+
+# [AGENTS PARTICIPATING]
+# Only applies when SYNC
+# 1. Number of UAV etc (1 2 3 4 5)
+# 2, ALL
+
+custom_commands:
+    T_ALL: ["TAKEOFF", "SYNC_START_END", "ALL"]
+    L_INV: ["LAND", "NOSYNC", ""]
+    L_ALL: ["LAND", "SYNC_START", "ALL"]
+    H: ["HOLD", "NOSYNC", "", "5.0"]
+    MOVE1: ["MOVE", "SYNC_START", "1", "1.0 0.0 1.0 -0.707"]
+
+command_sequence:
+  mav1: ["T_ALL", "H", "L_INV"]

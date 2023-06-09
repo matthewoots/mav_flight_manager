@@ -1,6 +1,20 @@
-offboard_command_rate: 10.0
-external_timeout: 15.0
-max_velocity: 2.0
-max_acceleration: 10.0
-takeoff_land_velocity: 1.0
-takeoff_height: 1.0
+general:
+  offboard_command_rate: 10.0
+  status_rate: 2.0
+
+  external_timeout: 15.0
+  takeoff_land_velocity: 1.0
+  takeoff_height: 1.0
+
+dynamics:
+  max_velocity: 2.0
+  max_acceleration: 10.0
+
+polynomial_opt:
+  weight:
+    time_reg: 2048.0
+    acceleration: 20.0
+    jerk: 3.0
+  limits:
+    iterations: 26
+    epsilon: 0.02

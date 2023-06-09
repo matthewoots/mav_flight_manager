@@ -1,21 +1,11 @@
 #ifndef FLIGHTMANAGER_H
 #define FLIGHTMANAGER_H
 
-#include <chrono>
-#include <memory>
-#include <queue>
-#include <vector>
-#include <string>
 #include <mutex>
 
 #include <fmt/core.h>
 #include <fmt/color.h>
 #include <yaml-cpp/yaml.h>
-
-#include <mavsdk/mavsdk.h>
-#include <mavsdk/plugins/action/action.h>
-#include <mavsdk/plugins/telemetry/telemetry.h>
-#include <mavsdk/plugins/offboard/offboard.h>
 
 #include <boost/statechart/event.hpp>
 #include <boost/statechart/state_machine.hpp>
@@ -26,13 +16,18 @@
 #include "geometry_msgs/msg/PoseStamped.h"
 #include "geometry_msgs/msg/PoseStampedPublisher.h"
 
-#include <Eigen/Dense>
+#include "custom_msgs/msg/AgentCommand.h"
+#include "custom_msgs/msg/AgentCommandSubscriber.h"
+#include "custom_msgs/msg/AgentStatus.h"
+#include "custom_msgs/msg/AgentStatusPublisher.h"
+
+#include "utils.h"
 
 #define fmlog "[flightManager]"
 #define poseGroup "pose"
 #define trajectoryGroup "trajectory"
 
-typedef std::chrono::time_point<std::chrono::system_clock> t_p_sc; // giving a typename
+using namespace utils;
 
 namespace flightManager
 {
@@ -41,57 +36,13 @@ namespace flightManager
     // 2. Mavlink Publisher
     // 3. DDS Subscriber
 
-    enum flight_states
-    {
-        GROUND, // on ground
-        TAKEOFF, // takeoff sequence
-        MISSION_INTERAL, // move according to internal command
-        MISSION_EXTERNAL, // move according to external command
-        HOVER, // stop and hover
-        LAND, // landing sequence
-        EMERGENCY // emergency
-    };   
-
-    // Table of Contents specifically for the uav
-    struct toc
-    {
-        t_p_sc t;
-        uint8_t sys_id;
-        uint8_t flight_state;
-        bool is_local_position_ready;
-        bool is_offboard;
-        bool connected;
-        Eigen::Affine3f nwuTransform;
-    };
-
     std::map<uint8_t, toc> _agents_map;
     std::mutex _mutex;
 
-    std::string flight_state_printer(uint8_t s)
-    {
-        switch(s)
-        {
-            case flight_states::GROUND:
-                return "GROUND";
-            case flight_states::TAKEOFF:
-                return "TAKEOFF";
-            case flight_states::MISSION_INTERAL:
-                return "MISSION_INTERAL";
-            case flight_states::MISSION_EXTERNAL:
-                return "MISSION_EXTERNAL";
-            case flight_states::HOVER:
-                return "HOVER";
-            case flight_states::LAND:
-                return "LAND";
-            case flight_states::EMERGENCY:
-                return "EMERGENCY";
-            default:
-                return "ERROR";
-        }
-    }
-
-    void agent_status_publisher(
-        std::shared_ptr<mavsdk::System> _system);
+    void mav_dds_bridge_handler(
+        std::shared_ptr<mavsdk::System> _system, double status_pub_rate);
+    
+    void user_command_handler();
 
     // void trigger_publisher();
     
@@ -123,6 +74,10 @@ namespace flightManager
             std::map<uint8_t, toc>::iterator _iterator;
             
             std::vector<std::thread> threads;
+            double takeoff_height;
+            double takeoff_land_velocity;
+            double offboard_command_rate;
+            double status_rate;
 
             struct EvChangeState : boost::statechart::event<EvChangeState> {};
             struct EvTakeoff : boost::statechart::event<EvTakeoff> {};
@@ -138,8 +93,7 @@ namespace flightManager
                     fmt::print(fg(fmt::color::light_green), 
                         "{} mav{} GROUND -> TAKEOFF\n", 
                         "[fsm]", context<fsm>()._iterator->first);
-                    context<fsm>()._iterator->second.flight_state = 
-                        flightManager::TAKEOFF;
+                    context<fsm>()._iterator->second.flight_state = TAKEOFF;
                 }
             };
 
@@ -167,6 +121,18 @@ namespace flightManager
             {
                 _mavSystem = std::move(mavSystem);
 
+                YAML::Node parameters = 
+                    YAML::LoadFile("config/common_parameters.yaml");
+                
+                takeoff_height = 
+                    parameters["general"]["takeoff_height"].as<double>();
+                takeoff_land_velocity = 
+                    parameters["general"]["takeoff_land_velocity"].as<double>();
+                offboard_command_rate = 
+                    parameters["general"]["offboard_command_rate"].as<double>();
+                status_rate = 
+                    parameters["general"]["status_rate"].as<double>();
+
                 fmt::print(fg(fmt::color::light_green), 
                     "{} mav{} enter FlightManager setup\n", 
                     fmlog, _mavSystem->get_system_id());
@@ -175,7 +141,7 @@ namespace flightManager
 
                 toc _tableOfContents;
                 _tableOfContents.t = std::chrono::system_clock::now();
-                _tableOfContents.flight_state = flightManager::GROUND;
+                _tableOfContents.flight_state = GROUND;
                 _tableOfContents.sys_id = _mavSystem->get_system_id();
 
                 _agents_map.insert(std::pair
@@ -188,18 +154,21 @@ namespace flightManager
                 _offboard = 
                     std::make_shared<mavsdk::Offboard>(_mavSystem);
 
-                // create a thread for subscription
-                std::thread t(
-                    &flightManager::agent_status_publisher,
-                    _mavSystem);
-                threads.push_back(std::move(t));
+                // create a thread for mavlink to dds
+                std::thread t_m_d(
+                    &flightManager::mav_dds_bridge_handler, 
+                    _mavSystem, status_rate);
+                threads.push_back(std::move(t_m_d));
 
-                // create a thread for publishing
+                // create a thread for dds subscriber
+                std::thread t_d_s(
+                    &flightManager::user_command_handler);
+                threads.push_back(std::move(t_d_s));
 
                 _fsm->setup(_tableOfContents.sys_id);
                 _fsm->initiate();
-                _fsm->process_event(EvChangeState());
-                _fsm->process_event(EvTakeoff());
+                // _fsm->process_event(EvChangeState());
+                // _fsm->process_event(EvTakeoff());
             };
 
             void fm_print_toc()
@@ -211,12 +180,11 @@ namespace flightManager
                 fmt::print( 
                     "{} mav{} {} pos({} {} {})\n", 
                     fmlog, _iterator->second.sys_id, 
-                    flight_state_printer(_iterator->second.flight_state), 
+                    get_flight_state(_iterator->second.flight_state), 
                     x, y, z);
             };
 
             ~FlightManager(){};
-
     };
 }
 

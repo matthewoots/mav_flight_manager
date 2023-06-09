@@ -1,9 +1,15 @@
 [submodule "external/yaml-cpp"]
 	path = external/yaml-cpp
 	url = git@github.com:jbeder/yaml-cpp.git
+	branch = yaml-cpp-0.7.0
 [submodule "external/sockpp"]
 	path = external/sockpp
 	url = git@github.com:fpagliughi/sockpp.git
 [submodule "external/msgs_idl"]
 	path = external/msgs_idl
 	url = git@github.com:matthewoots/msgs_idl.git
+	branch = master
+[submodule "external/fmt"]
+	path = external/fmt
+	url = git@github.com:fmtlib/fmt.git
+	branch = 9.1.0

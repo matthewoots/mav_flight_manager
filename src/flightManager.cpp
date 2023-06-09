@@ -8,11 +8,12 @@ static std::string get_current_time_string()
     return s;
 }
 
-void flightManager::agent_status_publisher(
-    std::shared_ptr<mavsdk::System> _system)
+void flightManager::mav_dds_bridge_handler(
+    std::shared_ptr<mavsdk::System> _system, double status_pub_rate)
 {
     using namespace std::literals::chrono_literals;
     PoseStampedPublisher pose_stamped_pub;
+    AgentStatusPublisher agent_status_pub;
 
     std::map<uint8_t, toc>::iterator iter = 
         _agents_map.find(_system->get_system_id());
@@ -28,6 +29,7 @@ void flightManager::agent_status_publisher(
     fmt::print("{} setup dds publisher on mav{} ...\n", 
         fmlog, iter->second.sys_id);
     pose_stamped_pub.init("rt/mav" + std::to_string(iter->second.sys_id) + "/pose");
+    agent_status_pub.init("rt/agents/status");
 
     auto telemetry = mavsdk::Telemetry{_system};
     telemetry.subscribe_odometry([&](mavsdk::Telemetry::Odometry odom) 
@@ -50,6 +52,7 @@ void flightManager::agent_status_publisher(
             );
 
             _mutex.lock();
+            iter->second.t = std::chrono::system_clock::now();
             iter->second.nwuTransform.translation() = pos_nwu;
             iter->second.nwuTransform.linear() = rot.toRotationMatrix();
             _mutex.unlock();
@@ -88,8 +91,18 @@ void flightManager::agent_status_publisher(
     telemetry.subscribe_health([&](mavsdk::Telemetry::Health health) 
     {
         _mutex.lock();
+        iter->second.t = std::chrono::system_clock::now();
         iter->second.is_local_position_ready = 
             health.is_local_position_ok;
+        _mutex.unlock();
+    });
+
+    telemetry.subscribe_flight_mode(
+        [&](mavsdk::Telemetry::FlightMode _flight_mode)
+    {
+        _mutex.lock();
+        iter->second.t = std::chrono::system_clock::now();
+        iter->second.flight_mode = _flight_mode;
         _mutex.unlock();
     });
 
@@ -98,13 +111,49 @@ void flightManager::agent_status_publisher(
 
     // keep this thread running
     while (true)
-        std::this_thread::sleep_for(5ms);
+    {
+        double connection_timeout = 5.0;
+
+        custom_msgs::msg::AgentStatus status_msg;
+
+        _mutex.lock();
+        // check if all the data is avaiable
+        std::chrono::duration<double> diff =
+            std::chrono::system_clock::now() - iter->second.t;
+        // iter->second.t = std::chrono::system_clock::now();
+        iter->second.connected = 
+            std::abs(diff.count()) > connection_timeout ? false : true;
+        _mutex.unlock();
+
+        status_msg.mav_id().data() = iter->first;
+        status_msg.connected().data() = iter->second.connected;
+        status_msg.fm_state().data() = 
+            get_flight_state(iter->second.flight_state);
+        status_msg.fc_state().data() = 
+            get_fc_flight_mode(iter->second.flight_mode);
+
+        // agent state publisher
+        agent_status_pub.publish(&status_msg);
+
+        auto literal = 1/status_pub_rate * 1000ms;
+        std::this_thread::sleep_for(literal);
+    }
 }
 
-// void flightManager::trigger_publisher()
-// {
-
-// }
+void flightManager::user_command_handler()
+{
+    AgentCommandSubscriber command_subscriber;
+    if (!command_subscriber.init("rt/user/command"))
+        return;
+        
+    double user_frequency = 2.0;
+    while (1)
+    {
+        custom_msgs::msg::AgentCommand _user_command = 
+            command_subscriber.run(user_frequency);
+        // when we receive a command we should handle it here
+    }
+}
 
 boost::statechart::result 
     flightManager::FlightManager::takeoff::react(const EvTakeoff &)
@@ -118,8 +167,7 @@ boost::statechart::result
     fmt::print(fg(fmt::color::light_green), 
         "{} mav{} TAKEOFF -> HOVER\n", 
         "[fsm]", context<fsm>()._iterator->first);
-    context<fsm>()._iterator->second.flight_state = 
-        flightManager::HOVER;
+    context<fsm>()._iterator->second.flight_state = HOVER;
     // while (1)
     // {
     //     Eigen::Vector3f pos = 
@@ -145,17 +193,9 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    // YAML::Node parameters = 
-    //     YAML::LoadFile("config/common_parameters.yaml");
-    
-    // double takeoff_height = 
-    //     parameters["takeoff_height"].as<double>();
-    // double offboard_command_rate = 
-    //     parameters["offboard_command_rate"].as<double>();
-
     double timeout = 2.0;
 
-    // for simulation udp://127.0.0.1:14650
+    // for simulation udp://127.0.0.1:14580
     mavsdk::ConnectionResult connection_result = 
         mav_sdk.add_any_connection(argv[1]);
     
